@@ -21,7 +21,6 @@ export default function USLScreen() {
 
         const url =
           `${ENV.USL_URL}/start` +
-          `?device_id=${deviceId}` +
           `&redirect_uri=${encodeURIComponent(redirectUri)}`;
 
         const result = await WebBrowser.openAuthSessionAsync(
