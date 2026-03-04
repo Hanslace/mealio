@@ -1,40 +1,49 @@
-// app/_layout.tsx
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Slot} from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
-import { Provider } from 'react-redux';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { store } from '@/store';
-import { AuthInitializer } from '@/components/AuthInitializer';
-import { useState } from 'react';
-
+import { Stack } from "expo-router";
+import { Provider } from "react-redux";
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect } from "react";
+import { useAppSelector, useAppDispatch ,store} from "@/store";
+import { bootstrapAuth } from "@/store/auth.slice"
 
 SplashScreen.preventAutoHideAsync();
 
-function RootLayoutContent({ authReady }: { authReady: boolean }) {
-  const colorScheme = useColorScheme();
-  
-
-  if (!authReady) {
-    return null; // NOTHING renders, router cannot resolve
-  }
-
+export default function RootLayout() {
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Slot />
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <Provider store={store}>
+      <RootNavigator/>
+    </Provider>
   );
 }
 
-export default function RootLayout() {
-  const [authReady, setAuthReady] = useState(false);
+
+function RootNavigator() {
+  const dispatch = useAppDispatch();
+  const status = useAppSelector((state) => state.auth.status);
+
+
+  useEffect(() => {
+    dispatch(bootstrapAuth());  
+  }, []);
+
+  useEffect(() => {
+    if (status === "authenticated" || status === "unauthenticated") {
+      SplashScreen.hideAsync();
+    }
+  }, [status]);
+
+  if (status === "idle" || status === "loading") {
+    return null;
+  }
+
   return (
-    <Provider store={store}>
-      <AuthInitializer onReady={() => setAuthReady(true)} />
-      <RootLayoutContent authReady={authReady} />
-    </Provider>
+    <Stack>
+      <Stack.Protected guard={status === "authenticated"}>
+        <Stack.Screen name="(app)" />
+      </Stack.Protected>
+
+      <Stack.Protected guard={status === "unauthenticated"}>
+        <Stack.Screen name="index" />
+      </Stack.Protected>
+    </Stack>
   );
 }

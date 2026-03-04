@@ -1,10 +1,13 @@
 // lib/api.ts
-import axios from 'axios';
-import * as SecureStore from 'expo-secure-store';
-import { store } from '@/store';
-import { setAccessToken, clearAccessToken, selectAccessToken } from '@/store/auth.slice';
 import { ENV } from '@/config/env';
-import { getDeviceId } from '@/lib/device';
+import { forceLogout, setAccessToken, store } from '@/store';
+import axios from 'axios';
+import { refreshAsync } from 'expo-auth-session';
+import * as SecureStore from 'expo-secure-store';
+
+const sessionDiscovery = {
+  tokenEndpoint: `${ENV.API_BASE_URL}/auth/session/refresh`,
+};
 
 const api = axios.create({
   baseURL: ENV.API_BASE_URL,
@@ -12,62 +15,83 @@ const api = axios.create({
 
 // Request interceptor
 api.interceptors.request.use(async (config) => {
-
-  const token = selectAccessToken(store.getState());
+  const token = store.getState().auth.accessToken;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  
   return config;
 });
+
+// ─── Concurrent refresh queue ────────────────────────────────────────────────
+let isRefreshing = false;
+let refreshSubscribers: Array<(token: string) => void> = [];
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers = [];
+}
+
+function subscribeToRefresh(cb: (token: string) => void) {
+  refreshSubscribers.push(cb);
+}
 
 // Response interceptor
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
+
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      
+
+      // If a refresh is already in-flight, queue this request until it resolves
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          subscribeToRefresh((newToken) => {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            resolve(api(originalRequest));
+          });
+        });
+      }
+
+      isRefreshing = true;
       const success = await refreshAccessToken();
-      
+      isRefreshing = false;
+
       if (success) {
-        const token = selectAccessToken(store.getState());
+        const token = store.getState().auth.accessToken;
+        onRefreshed(token!);
         originalRequest.headers.Authorization = `Bearer ${token}`;
         return api(originalRequest);
       } else {
-        // Refresh failed - logout
-        store.dispatch(clearAccessToken());
+        refreshSubscribers = [];
+        store.dispatch(forceLogout());
         await SecureStore.deleteItemAsync('refresh_token');
-        // Navigation handled by AuthInitializer
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
 
 const refreshAccessToken = async (): Promise<boolean> => {
   try {
-    const refreshToken = await SecureStore.getItemAsync('refresh_token');
-    
-    if (!refreshToken) {
-      return false;
+    const storedToken = await SecureStore.getItemAsync('refresh_token');
+    if (!storedToken) return false;
+
+    const tokenResponse = await refreshAsync(
+      { clientId: "", refreshToken: storedToken },
+      sessionDiscovery,
+    );
+
+    // Rotate refresh token in secure storage
+    if (tokenResponse.refreshToken) {
+      await SecureStore.setItemAsync('refresh_token', tokenResponse.refreshToken);
     }
-    
-    const response = await axios.post(`${ENV.API_BASE_URL}/auth/refresh`, {
-      refresh_token: refreshToken,
-      device_id: await getDeviceId(),
-    });
-    
-    const { access_token } = response.data;
-    
-    store.dispatch(setAccessToken(access_token));
-    
+
+    store.dispatch(setAccessToken(tokenResponse.accessToken));
     return true;
-  } catch (error) {
-    console.error('Token refresh failed:', error);
+  } catch {
     return false;
   }
 };
