@@ -1,13 +1,8 @@
 // lib/api.ts
 import { ENV } from '@/config/env';
-import { forceLogout, setAccessToken, store } from '@/store';
+import { resetAccessToken, setAccessToken, store } from '@/store';
 import axios from 'axios';
-import { refreshAsync } from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
-
-const sessionDiscovery = {
-  tokenEndpoint: `${ENV.API_BASE_URL}/auth/session/refresh`,
-};
 
 const api = axios.create({
   baseURL: ENV.API_BASE_URL,
@@ -65,7 +60,7 @@ api.interceptors.response.use(
         return api(originalRequest);
       } else {
         refreshSubscribers = [];
-        store.dispatch(forceLogout());
+        store.dispatch(resetAccessToken());
         await SecureStore.deleteItemAsync('refresh_token');
       }
     }
@@ -79,10 +74,15 @@ const refreshAccessToken = async (): Promise<boolean> => {
     const storedToken = await SecureStore.getItemAsync('refresh_token');
     if (!storedToken) return false;
 
-    const tokenResponse = await refreshAsync(
-      { clientId: "", refreshToken: storedToken },
-      sessionDiscovery,
-    );
+    const res = await fetch(`${ENV.API_BASE_URL}/auth/session/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: storedToken }),
+    });
+
+    if (!res.ok) return false;
+
+    const tokenResponse = await res.json();
 
     // Rotate refresh token in secure storage
     if (tokenResponse.refreshToken) {

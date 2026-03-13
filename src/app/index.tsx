@@ -12,7 +12,6 @@ import * as WebBrowser from "expo-web-browser";
 import {
   useAuthRequest,
   makeRedirectUri,
-  exchangeCodeAsync,
 } from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 import { useAppDispatch, setAccessToken } from "@/store";
@@ -23,7 +22,6 @@ WebBrowser.maybeCompleteAuthSession();
 
 const discovery = {
   authorizationEndpoint: `${ENV.USL_URL}/authorize`,
-  tokenEndpoint: `${ENV.API_BASE_URL}/auth/session/exchange`,
 };
 
 export default function AuthScreen() {
@@ -67,17 +65,19 @@ export default function AuthScreen() {
     // "cancel" / "dismiss" → do nothing, stay on auth page
   }, [response]);
 
-  // ─── exchangeCodeAsync sends the code to tokenEndpoint and parses ──
-  // the standard OAuth token response for us.
   const handleCodeExchange = async (code: string) => {
     setExchanging(true);
     try {
-      const tokenResponse = await exchangeCodeAsync(
-        { clientId: "", redirectUri, code },
-        discovery
-      );
+      const res = await fetch(`${ENV.API_BASE_URL}/auth/session/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
 
-      // Persist refresh token securely; keep access token only in memory
+      if (!res.ok) throw new Error('exchange_failed');
+
+      const tokenResponse = await res.json();
+
       if (tokenResponse.refreshToken) {
         await SecureStore.setItemAsync("refresh_token", tokenResponse.refreshToken);
       }
